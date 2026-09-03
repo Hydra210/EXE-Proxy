@@ -1,0 +1,117 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #000;
+  color: #fff;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+}
+
+#stars {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: block;
+}
+
+.wrap {
+  position: relative;
+  z-index: 1;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+}
+
+.logo {
+  font-size: 4rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0;
+  color: #fff;
+  text-shadow: 0 0 24px rgba(255, 255, 255, 0.25);
+}
+
+.logo span {
+  font-weight: 300;
+  color: #d0d0d0;
+}
+
+.tagline {
+  margin: 12px 0 40px;
+  color: #999;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+
+.bar {
+  display: flex;
+  width: min(560px, 90vw);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  padding: 6px;
+  backdrop-filter: blur(6px);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.bar:focus-within {
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.06);
+}
+
+.bar input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-size: 1rem;
+  padding: 12px 16px;
+}
+
+.bar input::placeholder {
+  color: #666;
+}
+
+.bar button {
+  background: #fff;
+  color: #000;
+  border: none;
+  border-radius: 999px;
+  padding: 0 26px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.bar button:hover {
+  opacity: 0.85;
+}
+
+.hint {
+  margin-top: 18px;
+  font-size: 0.8rem;
+  color: #555;
+}
+
+footer {
+  position: fixed;
+  bottom: 16px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  z-index: 1;
+  color: #444;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+}
