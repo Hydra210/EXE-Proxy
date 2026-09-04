@@ -1,12 +1,53 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const cheerio = require('cheerio');
+const compression = require('compression');
+const http = require('http');
+const https = require('https');
 const { URL } = require('url');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Gzip everything we send back to the browser (HTML, and any text-ish
+// passthrough assets that aren't already compressed).
+app.use(compression());
+
 app.use(express.static('public'));
+
+// Reuse TCP/TLS connections to upstream hosts instead of paying a fresh
+// handshake on every single request (page + every image/css/js it loads).
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 50 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 50 });
+function agentFor(targetUrl) {
+  return targetUrl.startsWith('https:') ? httpsAgent : httpAgent;
+}
+
+// Small in-memory cache for non-HTML assets (css/js/images/fonts) so that
+// the same file requested repeatedly within a short window — very common
+// across a single page load, or a few reloads — doesn't get re-fetched
+// through Render every time. Capped in size; not persisted across restarts.
+const assetCache = new Map(); // url -> { body, contentType, headers, expiresAt }
+const ASSET_CACHE_MAX_ENTRIES = 200;
+const ASSET_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCachedAsset(url) {
+  const hit = assetCache.get(url);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    assetCache.delete(url);
+    return null;
+  }
+  return hit;
+}
+
+function setCachedAsset(url, entry) {
+  if (assetCache.size >= ASSET_CACHE_MAX_ENTRIES) {
+    const oldestKey = assetCache.keys().next().value;
+    assetCache.delete(oldestKey);
+  }
+  assetCache.set(url, entry);
+}
 
 // --- helpers -----------------------------------------------------------
 
@@ -147,15 +188,30 @@ XMLHttpRequest.prototype.open = function(method, url){
 
 // --- routes --------------------------------------------------------------
 
+// Content types worth caching in memory + telling the browser to cache.
+// Deliberately excludes JSON/text (often live API data that shouldn't go stale).
+const CACHEABLE_ASSET_RE = /^(image\/|font\/|text\/css|(application|text)\/javascript|application\/font|application\/x-font)/i;
+
 app.get('/proxy', async (req, res) => {
   const target = normalizeTarget(req.query.url);
   if (!target) {
     return res.status(400).send('Missing or invalid ?url= parameter.');
   }
 
+  // Serve from our own cache when we can — skips the upstream round trip
+  // entirely for assets we've already fetched recently (shared css/js,
+  // logos, icon fonts, etc. that show up across many page loads).
+  const cached = getCachedAsset(target);
+  if (cached) {
+    res.set('Content-Type', cached.contentType);
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.send(cached.body);
+  }
+
   try {
     const upstream = await fetch(target, {
       redirect: 'follow',
+      agent: (parsedUrl) => (parsedUrl.protocol === 'http:' ? httpAgent : httpsAgent),
       headers: {
         'User-Agent':
           req.get('user-agent') ||
@@ -173,10 +229,24 @@ app.get('/proxy', async (req, res) => {
       const body = await upstream.text();
       const rewritten = rewriteHtml(body, upstream.url || target);
       res.set('Content-Type', 'text/html; charset=utf-8');
+      // Pages are dynamic (search results, feeds, etc.) — don't cache these.
+      res.set('Cache-Control', 'no-cache');
       return res.send(rewritten);
     }
 
-    // Non-HTML (images, css, js, fonts, json, etc.) — stream through as-is
+    if (CACHEABLE_ASSET_RE.test(contentType)) {
+      const buffer = await upstream.buffer();
+      res.set('Content-Type', contentType || 'application/octet-stream');
+      res.set('Cache-Control', 'public, max-age=300');
+      setCachedAsset(target, {
+        body: buffer,
+        contentType: contentType || 'application/octet-stream',
+        expiresAt: Date.now() + ASSET_CACHE_TTL_MS,
+      });
+      return res.send(buffer);
+    }
+
+    // Everything else (JSON APIs, streaming media, etc.) — stream through as-is
     res.set('Content-Type', contentType || 'application/octet-stream');
     upstream.body.pipe(res);
   } catch (err) {
