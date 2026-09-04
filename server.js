@@ -144,7 +144,12 @@ function rewriteEl(el){
   if (!el || !el.getAttribute) return;
   REWRITE_ATTRS.forEach(function(attr){
     var val = el.getAttribute(attr);
-    if (val) el.setAttribute(attr, proxied(val));
+    if (!val) return;
+    var next = proxied(val);
+    // Only touch the DOM if the value would actually change — calling
+    // setAttribute with the same value still fires a mutation event,
+    // which would otherwise re-trigger this same handler forever.
+    if (next !== val) el.setAttribute(attr, next);
   });
 }
 function rewriteTree(root){
@@ -157,7 +162,10 @@ function startObserving(){
   new MutationObserver(function(muts){
     muts.forEach(function(m){
       if (m.addedNodes) m.addedNodes.forEach(function(n){ if (n.nodeType === 1) rewriteTree(n); });
-      if (m.type === 'attributes') rewriteEl(m.target);
+      if (m.type === 'attributes' && m.target && m.target.getAttribute) {
+        var val = m.target.getAttribute(m.attributeName);
+        if (val && val.indexOf('/proxy?url=') !== 0) rewriteEl(m.target);
+      }
     });
   }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: REWRITE_ATTRS });
   rewriteTree(document);
