@@ -74,6 +74,20 @@ function toProxied(base, resourceUrl) {
   }
 }
 
+// Rewrites url(...) references inside CSS text (external stylesheets,
+// <style> blocks, and style="" attributes) so backgrounds, @font-face,
+// @import, etc. get routed through the proxy too — otherwise they just
+// point straight at the real site and silently fail to load.
+const CSS_URL_RE = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+function rewriteCssText(css, baseUrl) {
+  if (!css) return css;
+  return css.replace(CSS_URL_RE, (match, quote, rawUrl) => {
+    const url = rawUrl.trim();
+    if (!url || url.startsWith('data:') || url.startsWith('#')) return match;
+    return `url(${quote}${toProxied(baseUrl, url)}${quote})`;
+  });
+}
+
 const REWRITE_ATTRS = ['href', 'src', 'action', 'srcset'];
 
 function rewriteHtml(html, baseUrl) {
@@ -111,17 +125,36 @@ function rewriteHtml(html, baseUrl) {
   // Neutralize base tags so relative resolution stays predictable
   $('base').remove();
 
-  // Rewrite meta-refresh redirects (e.g. <meta http-equiv="refresh" content="0;url=...">)
+  // Rewrite url(...) references inside <style> blocks and style="" attributes
+  $('style').each((_, el) => {
+    $(el).text(rewriteCssText($(el).html(), baseUrl));
+  });
+  $('[style]').each((_, el) => {
+    const node = $(el);
+    node.attr('style', rewriteCssText(node.attr('style'), baseUrl));
+  });
+
+  // Handle <meta http-equiv> tags: rewrite refresh redirects, strip CSP
+  // (the page's own CSP can otherwise block our injected script and/or
+  // resources now loading from our domain instead of the original one).
   $('meta[http-equiv]').each((_, el) => {
     const node = $(el);
-    if ((node.attr('http-equiv') || '').toLowerCase() !== 'refresh') return;
-    const content = node.attr('content');
-    if (!content) return;
-    const match = content.match(/^(\d+)\s*;\s*url=(.+)$/i);
-    if (!match) return;
-    const seconds = match[1];
-    const url = match[2].trim().replace(/^['"]|['"]$/g, '');
-    node.attr('content', `${seconds};url=${toProxied(baseUrl, url)}`);
+    const httpEquiv = (node.attr('http-equiv') || '').toLowerCase();
+
+    if (httpEquiv === 'content-security-policy') {
+      node.remove();
+      return;
+    }
+
+    if (httpEquiv === 'refresh') {
+      const content = node.attr('content');
+      if (!content) return;
+      const match = content.match(/^(\d+)\s*;\s*url=(.+)$/i);
+      if (!match) return;
+      const seconds = match[1];
+      const url = match[2].trim().replace(/^['"]|['"]$/g, '');
+      node.attr('content', `${seconds};url=${toProxied(baseUrl, url)}`);
+    }
   });
 
   // Inject a base target marker
@@ -239,6 +272,19 @@ app.get('/proxy', async (req, res) => {
       res.set('Content-Type', 'text/html; charset=utf-8');
       // Pages are dynamic (search results, feeds, etc.) — don't cache these.
       res.set('Cache-Control', 'no-cache');
+      return res.send(rewritten);
+    }
+
+    if (contentType.includes('text/css')) {
+      const cssText = await upstream.text();
+      const rewritten = rewriteCssText(cssText, upstream.url || target);
+      res.set('Content-Type', 'text/css; charset=utf-8');
+      res.set('Cache-Control', 'public, max-age=300');
+      setCachedAsset(target, {
+        body: rewritten,
+        contentType: 'text/css; charset=utf-8',
+        expiresAt: Date.now() + ASSET_CACHE_TTL_MS,
+      });
       return res.send(rewritten);
     }
 
